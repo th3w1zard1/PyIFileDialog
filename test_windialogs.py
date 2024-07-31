@@ -4,8 +4,8 @@ from _ctypes import _Pointer
 import random
 import sys
 
-from ctypes import POINTER, c_ulong, cast
-from ctypes.wintypes import HWND, LPCWSTR
+from ctypes import c_ulong
+from ctypes.wintypes import HWND
 
 from interfaces import COMDLG_FILTERSPEC, IFileDialog, IFileOpenDialog, IFileSaveDialog
 from windialogs import (
@@ -54,11 +54,11 @@ def getUserInputInt(prompt: str, validChoices: list[int], defaultValue: int) -> 
 def manageFilters(filters: list[COMDLG_FILTERSPEC], randomize: bool) -> None:
     if randomize:
         numFilters = GetRandomNumber(1, 25)
-        filters.append(COMDLG_FILTERSPEC(LPCWSTR("All Files"), LPCWSTR("*.*")))
+        filters.append(COMDLG_FILTERSPEC("All Files", "*.*"))
         for i in range(numFilters):
             filterName = f"Random Filter {i + 1}"
             filterSpec = f"*.{i + 1}"
-            filters.append(COMDLG_FILTERSPEC(LPCWSTR(filterName), LPCWSTR(filterSpec)))
+            filters.append(COMDLG_FILTERSPEC(filterName, filterSpec))
         return
 
     while True:
@@ -73,14 +73,14 @@ def manageFilters(filters: list[COMDLG_FILTERSPEC], randomize: bool) -> None:
         if choice == 1:
             filterName = getUserInputStr("Enter filter name: ", "Default Filter")
             filterSpec = getUserInputStr("Enter filter spec: ", "*.*")
-            filters.append(COMDLG_FILTERSPEC(LPCWSTR(filterName), LPCWSTR(filterSpec)))
+            filters.append(COMDLG_FILTERSPEC(filterName, filterSpec))
         elif choice == len(filters) + 2:
             break
         else:
             filter_index = choice - 2
             print(f"\nEditing Filter: {filters[filter_index].pszName} ({filters[filter_index].pszSpec})")
-            filters[filter_index].pszName = LPCWSTR(getUserInputStr("Enter new filter name: ", filters[filter_index].pszName))
-            filters[filter_index].pszSpec = LPCWSTR(getUserInputStr("Enter new filter spec: ", filters[filter_index].pszSpec))
+            filters[filter_index].pszName = getUserInputStr("Enter new filter name: ", filters[filter_index].pszName)
+            filters[filter_index].pszSpec = getUserInputStr("Enter new filter spec: ", filters[filter_index].pszSpec)
 
 
 def configureDialogOptions(optionStates: list[int], randomize: bool) -> None:
@@ -166,7 +166,7 @@ def main() -> int:
         title = getUserInputStr("Dialog title (default: My Python IFileOpenDialog): ", "My Python IFileOpenDialog") if not randomize else "My Python IFileOpenDialog"
         defaultFolder = getUserInputStr("Default folder path (default: C:): ", "C:") if not randomize else "C:"
 
-        filters = []
+        filters: list[COMDLG_FILTERSPEC] = []
         options = getFileDialogOptions(isSaveDialog, randomize, filters)
 
         comFuncs = LoadCOMFunctionPointers()

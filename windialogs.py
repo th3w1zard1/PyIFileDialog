@@ -8,8 +8,6 @@ from typing import TYPE_CHECKING, Sequence
 from interfaces import (
     COMDLG_FILTERSPEC,
     E_NOINTERFACE,
-    FOS_ALLOWMULTISELECT,
-    FOS_FORCEFILESYSTEM,
     SFGAO_FILESYSTEM,
     SFGAO_FOLDER,
     SIGDN_FILESYSPATH,
@@ -30,6 +28,7 @@ from interfaces import (
     IShellItem,
     IShellItemArray,
     IUnknown,
+    SHCreateItemFromParsingName,
 )
 from hresult import S_OK, decode_hresult
 
@@ -160,11 +159,10 @@ def showDialog(
 
 def createShellItem(comFuncs: COMFunctionPointers, path: str) -> _Pointer[IShellItem]:  # noqa: N803, ARG001
     shell_item = POINTER(IShellItem)()
-    path_wstr = path
-    hr = comFuncs.pSHCreateItemFromParsingName(path_wstr, None, IShellItem._iid_, byref(shell_item))
+    hr = SHCreateItemFromParsingName(path, None, IShellItem._iid_, byref(shell_item))
     if hr != S_OK:
         print(decode_hresult(hr))
-        raise ValueError(f"Failed to create shell item from path: {path_wstr}")
+        raise ValueError(f"Failed to create shell item from path: {path}")
     return shell_item
 
 
@@ -172,17 +170,17 @@ def createShellItem(comFuncs: COMFunctionPointers, path: str) -> _Pointer[IShell
 def configureFileDialog(  # noqa: PLR0913
     comFuncs: COMFunctionPointers,  # noqa: N803
     pFileDialog: _Pointer[IFileOpenDialog | IFileSaveDialog | IFileDialog],  # noqa: N803
-    filters: list[dict],  # noqa: N803
+    filters: list[COMDLG_FILTERSPEC],  # noqa: N803
     defaultFolder: str,  # noqa: N803
-    options: DWORD,
+    options: c_ulong,
     forceFileSystem: bool = False,  # noqa: N803, FBT001, FBT002
     allowMultiselect: bool = False,  # noqa: N803, FBT001, FBT002
 ):
     if filters:
         filter_array = (COMDLG_FILTERSPEC * len(filters))()
         for i, dialogFilter in enumerate(filters):
-            filter_array[i].pszName = dialogFilter["name"]
-            filter_array[i].pszSpec = dialogFilter["spec"]
+            filter_array[i].pszName = dialogFilter.pszName
+            filter_array[i].pszSpec = dialogFilter.pszSpec
 
         hr = pFileDialog.contents.lpVtbl.contents.SetFileTypes(pFileDialog, len(filters), filter_array)
         if hr != S_OK:
@@ -191,7 +189,7 @@ def configureFileDialog(  # noqa: PLR0913
             return
 
     if defaultFolder:
-        pFolder = createShellItem(comFuncs, defaultFolder)
+        pFolder: _Pointer[IShellItem] = createShellItem(comFuncs, defaultFolder)
         if pFolder:
             hr = pFileDialog.contents.lpVtbl.contents.SetFolder(pFileDialog, pFolder)
             if hr != S_OK:
@@ -202,10 +200,10 @@ def configureFileDialog(  # noqa: PLR0913
             pFolder.contents.lpVtbl.contents.Release(pFolder)
 
     if forceFileSystem:
-        options = DWORD(options.value | FOS_FORCEFILESYSTEM)
+        options = c_ulong(options.value | 0x00000040)  # FOS_FORCEFILESYSTEM
 
     if allowMultiselect:
-        options = DWORD(options.value | FOS_ALLOWMULTISELECT)
+        options = c_ulong(options.value | 0x00000200)  # FOS_ALLOWMULTISELECT
 
     hr = pFileDialog.contents.lpVtbl.contents.SetOptions(pFileDialog, options)
     if hr != S_OK:

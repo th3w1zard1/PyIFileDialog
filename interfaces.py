@@ -201,23 +201,6 @@ class IFileDialogEventsVTable(Structure):
 IFileDialogEvents._fields_ = [("lpVtbl", POINTER(IFileDialogEventsVTable))]
 
 
-class IEnumShellItems(Structure):
-    _iid_ = GUID("{8E8A8A7F-C50F-4F1F-B8F4-3B18BF1C5F40}")
-
-class IEnumShellItemsVTable(Structure):
-    _fields_: Sequence[tuple[str, type[_CData]] | tuple[str, type[_CData], int]] = [
-        ("QueryInterface", WINFUNCTYPE(HRESULT, POINTER(IEnumShellItems), POINTER(GUID), POINTER(POINTER(IUnknown)))),
-        ("AddRef", WINFUNCTYPE(c_ulong, POINTER(IEnumShellItems))),
-        ("Release", WINFUNCTYPE(c_ulong, POINTER(IEnumShellItems))),
-        ("Next", WINFUNCTYPE(HRESULT, POINTER(IEnumShellItems), c_uint, POINTER(POINTER(IShellItem)), POINTER(c_uint))),
-        ("Skip", WINFUNCTYPE(HRESULT, POINTER(IEnumShellItems), c_uint)),
-        ("Reset", WINFUNCTYPE(HRESULT, POINTER(IEnumShellItems))),
-        ("Clone", WINFUNCTYPE(HRESULT, POINTER(IEnumShellItems), POINTER(POINTER(IEnumShellItems)))),
-    ]
-
-IEnumShellItems._fields_ = [("lpVtbl", POINTER(IEnumShellItemsVTable))]
-
-
 class IFileOpenDialog(Structure):
     _iid_ = GUID("{D57C7288-D4AD-4768-BE02-9D969532D960}")
 
