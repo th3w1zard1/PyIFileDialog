@@ -1,15 +1,13 @@
 from __future__ import annotations
 
+from _ctypes import _Pointer
 import random
 import sys
 
 from ctypes import POINTER, c_ulong, cast
 from ctypes.wintypes import HWND, LPCWSTR
 
-from interfaces import (
-    COMDLG_FILTERSPEC,
-    IFileOpenDialog,
-)
+from interfaces import COMDLG_FILTERSPEC, IFileDialog, IFileOpenDialog, IFileSaveDialog
 from windialogs import (
     FreeCOMFunctionPointers,
     LoadCOMFunctionPointers,
@@ -168,7 +166,7 @@ def main() -> int:
         title = getUserInputStr("Dialog title (default: My Python IFileOpenDialog): ", "My Python IFileOpenDialog") if not randomize else "My Python IFileOpenDialog"
         defaultFolder = getUserInputStr("Default folder path (default: C:): ", "C:") if not randomize else "C:"
 
-        filters: list[COMDLG_FILTERSPEC] = []
+        filters = []
         options = getFileDialogOptions(isSaveDialog, randomize, filters)
 
         comFuncs = LoadCOMFunctionPointers()
@@ -179,14 +177,13 @@ def main() -> int:
             hr = comFuncs.pCoInitialize(None)
             if hr != S_OK:
                 raise RuntimeError(f"CoInitialize failed: {hr}")  # noqa: TRY301
-            pFileDialog = createFileDialog(comFuncs, isSaveDialog=dialogType==2)
+            pFileDialog: _Pointer[IFileOpenDialog | IFileSaveDialog | IFileDialog] = createFileDialog(comFuncs, dialogType)
 
             configureFileDialog(comFuncs, pFileDialog, filters, defaultFolder, options, forceFileSystem=True, allowMultiselect=True)
-            showDialog(comFuncs, pFileDialog, HWND(0))
+            showDialog(pFileDialog, HWND(0))
 
             if not isSaveDialog:
-                pFileOpenDialog = cast(pFileDialog, POINTER(IFileOpenDialog))
-                results = getFileDialogResults(comFuncs, pFileOpenDialog)
+                results: list[str] = getFileDialogResults(comFuncs, pFileDialog)
                 for filePath in results:
                     print(f"Selected file: {filePath}")
 
