@@ -6,12 +6,14 @@ from ctypes import POINTER, byref, c_uint, windll
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 from com_types import GUID
-from interfaces import IUnknown
-from hresult import S_FALSE, S_OK, decode_hresult
+from hresult import S_FALSE, decode_hresult
+from iunknown import S_OK
 
 if TYPE_CHECKING:
     from ctypes import _CData, _Pointer as PointerType
     from types import TracebackType
+
+    from interfaces import IUnknown
 
     T = TypeVar("T", bound=_CData)
 if not TYPE_CHECKING:

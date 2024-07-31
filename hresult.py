@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from ctypes import HRESULT as ctypesHRESULT, c_long  # noqa: N811
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Literal, cast
 
 if TYPE_CHECKING:
-    from typing_extensions import Self  # pyright: ignore[reportMissingModuleSource]
+    from typing_extensions import Literal, Self  # pyright: ignore[reportMissingModuleSource]
+
+
+class HRESULTException(OSError):
+    ...
 
 
 class HRESULT(ctypesHRESULT):
@@ -109,7 +113,9 @@ class HRESULT(ctypesHRESULT):
         99: "FACILITY_USERMODE_DNS_SERVER_WEB3",
     }
 
-    def __new__(cls, value: HRESULT | ctypesHRESULT | int | c_long | None = None) -> Self:
+    def __new__(
+        cls, value: HRESULT | ctypesHRESULT | int | c_long | None = None
+    ) -> Self:
         if value is None:
             converted_value = 0
         elif isinstance(value, int):
@@ -120,7 +126,7 @@ class HRESULT(ctypesHRESULT):
             raise TypeError(f"Invalid type for HRESULT: {type(value)}")
         instance = c_long(converted_value)
         instance.__class__ = cls
-        return instance
+        return cast(cls, instance)
 
     def __init__(self, value: HRESULT | ctypesHRESULT | int | c_long | None = None):
         if value is None:
@@ -133,10 +139,18 @@ class HRESULT(ctypesHRESULT):
             raise TypeError(f"Invalid type for HRESULT: {type(value)}")
 
     @staticmethod
-    def _convert_to_hresult(value: int) -> int:
+    def to_hresult(value: int) -> int:
         """Convert WinError to HRESULT if necessary."""
         if value & 0x80000000:
             value &= 0xFFFFFFFF
+        return value
+
+    @staticmethod
+    def from_hresult(value: int) -> int:
+        """Convert HRESULT to WinError."""
+        if value < 0:
+            # Convert HRESULT to WinError by clearing the sign bit.
+            return value & 0xFFFFFFFF
         return value
 
     def decode(self):
@@ -144,8 +158,8 @@ class HRESULT(ctypesHRESULT):
         facility: int = (self >> 16) & 0x1FFF
         code: int = self & 0xFFFF
 
-        severity_str = "Success" if severity == 0 else "Failure"
-        facility_str = HRESULT.FACILITY_CODES.get(facility, "Unknown Facility")
+        severity_str: Literal["Success", "Failure"] = "Success" if severity == 0 else "Failure"
+        facility_str: str = HRESULT.FACILITY_CODES.get(facility, "Unknown Facility")
 
         return (
             f"HRESULT: 0x{self:08X}\n"
@@ -155,19 +169,23 @@ class HRESULT(ctypesHRESULT):
         )
 
     def __str__(self):
-        return str(self._convert_to_hresult(self.value))
+        return str(self.to_hresult(self.value))
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.value})"
 
-    def __eq__(self, other: int | ctypesHRESULT) -> bool:  # sourcery skip: assign-if-exp, reintroduce-else
+    def __eq__(
+        self, other: int | ctypesHRESULT
+    ) -> bool:  # sourcery skip: assign-if-exp, reintroduce-else
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
             return self.value == other.value
         if isinstance(other, int):
             return self.value == c_long(other).value
         return NotImplemented
 
-    def __ne__(self, other: object) -> bool:  # sourcery skip: assign-if-exp, reintroduce-else
+    def __ne__(
+        self, other: object
+    ) -> bool:  # sourcery skip: assign-if-exp, reintroduce-else
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
             return self.value != other.value
         if isinstance(other, int):
@@ -175,7 +193,7 @@ class HRESULT(ctypesHRESULT):
         return NotImplemented
 
     def __int__(self) -> int:
-        return self._convert_to_hresult(self.value)
+        return self.to_hresult(self.value)
 
     def __hash__(self) -> int:
         return hash(self.value)
@@ -183,131 +201,106 @@ class HRESULT(ctypesHRESULT):
     def as_integer_ratio(self) -> tuple[int, int]:
         return (self.value, 1)
 
-    def __add__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value + self._convert_to_hresult(other.value)
-        return self.value + self._convert_to_hresult(other)
-
-    def __sub__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value - self._convert_to_hresult(other.value)
-        return self.value - self._convert_to_hresult(other)
-
-    def __mul__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value * self._convert_to_hresult(other.value)
-        return self.value * self._convert_to_hresult(other)
-
-    def __floordiv__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value // self._convert_to_hresult(other.value)
-        return self.value // self._convert_to_hresult(other)
-
-    def __truediv__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> float:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value / self._convert_to_hresult(other.value)
-        return self.value / self._convert_to_hresult(other)
-
     def __mod__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value % self._convert_to_hresult(other.value)
-        return self.value % self._convert_to_hresult(other)
+            return self.value % self.to_hresult(other.value)
+        return self.value % self.to_hresult(other)
 
-    def __divmod__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> tuple[int, int]:
+    def __divmod__(
+        self, other: HRESULT | ctypesHRESULT | int | c_long
+    ) -> tuple[int, int]:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return divmod(self.value, self._convert_to_hresult(other.value))
-        return divmod(self.value, self._convert_to_hresult(other))
+            return divmod(self.value, self.to_hresult(other.value))
+        return divmod(self.value, self.to_hresult(other))
 
-    def __pow__(self, other: HRESULT | ctypesHRESULT | int | c_long, mod: int | None = None) -> int:
-        other_value = self._convert_to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+    def __pow__(
+        self, other: HRESULT | ctypesHRESULT | int | c_long, mod: int | None = None
+    ) -> int:
+        other_value = self.to_hresult(
+            other.value
+            if isinstance(other, (HRESULT, ctypesHRESULT, c_long))
+            else other
+        )
         if mod is None:
             return pow(self.value, other_value)
         return pow(self.value, other_value, mod)
 
-    def __radd__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) + self._convert_to_hresult(self.value)
-        return self._convert_to_hresult(other) + self._convert_to_hresult(self.value)
-
-    def __rsub__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) - self._convert_to_hresult(self.value)
-        return self._convert_to_hresult(other) - self._convert_to_hresult(self.value)
-
-    def __rmul__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) * self._convert_to_hresult(self.value)
-        return self._convert_to_hresult(other) * self._convert_to_hresult(self.value)
-
-    def __rfloordiv__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) // self._convert_to_hresult(self.value)
-        return self._convert_to_hresult(other) // self._convert_to_hresult(self.value)
-
-    def __rtruediv__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> float:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) / self._convert_to_hresult(self.value)
-        return self._convert_to_hresult(other) / self._convert_to_hresult(self.value)
-
     def __rmod__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) % self._convert_to_hresult(self.value)
-        return self._convert_to_hresult(other) % self._convert_to_hresult(self.value)
+            return self.to_hresult(other.value) % self.to_hresult(
+                self.value
+            )
+        return self.to_hresult(other) % self.to_hresult(self.value)
 
-    def __rdivmod__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> tuple[int, int]:
+    def __rdivmod__(
+        self, other: HRESULT | ctypesHRESULT | int | c_long
+    ) -> tuple[int, int]:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return divmod(self._convert_to_hresult(other.value), self._convert_to_hresult(self.value))
-        return divmod(self._convert_to_hresult(other), self._convert_to_hresult(self.value))
+            return divmod(
+                self.to_hresult(other.value),
+                self.to_hresult(self.value),
+            )
+        return divmod(self.to_hresult(other), self.to_hresult(self.value))
 
     def __and__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(self.value) & self._convert_to_hresult(other.value)
-        return self._convert_to_hresult(self.value) & self._convert_to_hresult(other)
+            return self.to_hresult(self.value) & self.to_hresult(
+                other.value
+            )
+        return self.to_hresult(self.value) & self.to_hresult(other)
 
     def __or__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(self.value) | self._convert_to_hresult(other.value)
-        return self._convert_to_hresult(self.value) | self._convert_to_hresult(other)
+            return self.to_hresult(self.value) | self.to_hresult(
+                other.value
+            )
+        return self.to_hresult(self.value) | self.to_hresult(other)
 
     def __xor__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(self.value) ^ self._convert_to_hresult(other.value)
-        return self._convert_to_hresult(self.value) ^ self._convert_to_hresult(other)
+            return self.to_hresult(self.value) ^ self.to_hresult(
+                other.value
+            )
+        return self.to_hresult(self.value) ^ self.to_hresult(other)
 
     def __lshift__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(self.value) << self._convert_to_hresult(other.value)
-        return self._convert_to_hresult(self.value) << self._convert_to_hresult(other)
+            return self.to_hresult(self.value) << self.to_hresult(
+                other.value
+            )
+        return self.to_hresult(self.value) << self.to_hresult(other)
 
     def __rshift__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(self.value) >> self._convert_to_hresult(other.value)
-        return self._convert_to_hresult(self.value) >> self._convert_to_hresult(other)
+            return self.to_hresult(self.value) >> self.to_hresult(
+                other.value
+            )
+        return self.to_hresult(self.value) >> self.to_hresult(other)
 
     def __rand__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) & self.value
-        return self._convert_to_hresult(other) & self.value
+            return self.to_hresult(other.value) & self.value
+        return self.to_hresult(other) & self.value
 
     def __ror__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) | self.value
-        return self._convert_to_hresult(other) | self.value
+            return self.to_hresult(other.value) | self.value
+        return self.to_hresult(other) | self.value
 
     def __rxor__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) ^ self.value
-        return self._convert_to_hresult(other) ^ self.value
+            return self.to_hresult(other.value) ^ self.value
+        return self.to_hresult(other) ^ self.value
 
     def __rlshift__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) << self.value
-        return self._convert_to_hresult(other) << self.value
+            return self.to_hresult(other.value) << self.value
+        return self.to_hresult(other) << self.value
 
     def __rrshift__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self._convert_to_hresult(other.value) >> self.value
-        return self._convert_to_hresult(other) >> self.value
+            return self.to_hresult(other.value) >> self.value
+        return self.to_hresult(other) >> self.value
 
     def __neg__(self) -> int:
         return -self.value
@@ -321,12 +314,6 @@ class HRESULT(ctypesHRESULT):
     def __trunc__(self) -> int:
         return self.value
 
-    def __ceil__(self) -> int:
-        return self.value
-
-    def __floor__(self) -> int:
-        return self.value
-
     def __round__(self, ndigits: int = 0) -> int:
         return round(self.value, ndigits)
 
@@ -335,23 +322,23 @@ class HRESULT(ctypesHRESULT):
 
     def __lt__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> bool:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value < self._convert_to_hresult(other.value)
-        return self.value < self._convert_to_hresult(other)
+            return self.value < self.to_hresult(other.value)
+        return self.value < self.to_hresult(other)
 
     def __le__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> bool:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value <= self._convert_to_hresult(other.value)
-        return self.value <= self._convert_to_hresult(other)
+            return self.value <= self.to_hresult(other.value)
+        return self.value <= self.to_hresult(other)
 
     def __gt__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> bool:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value > self._convert_to_hresult(other.value)
-        return self.value > self._convert_to_hresult(other)
+            return self.value > self.to_hresult(other.value)
+        return self.value > self.to_hresult(other)
 
     def __ge__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> bool:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value >= self._convert_to_hresult(other.value)
-        return self.value >= self._convert_to_hresult(other)
+            return self.value >= self.to_hresult(other.value)
+        return self.value >= self.to_hresult(other)
 
     def __float__(self) -> float:
         return float(self.value)
@@ -367,8 +354,13 @@ class HRESULT(ctypesHRESULT):
 
     def __format__(self, format_spec: str) -> str:
         if format_spec == "08X":
-            return f"{self._convert_to_hresult(self.value):08X}"
-        return format(self._convert_to_hresult(self.value), format_spec)
+            return f"{self.to_hresult(self.value):08X}"
+        return format(self.to_hresult(self.value), format_spec)
+
+    def exception(self, short_desc: str):
+        return HRESULTException(self.to_hresult(self.value), decode_hresult(self), short_desc)
+
+
 
 def decode_hresult(hresult: HRESULT | int) -> str:
     if isinstance(hresult, HRESULT):
@@ -377,11 +369,13 @@ def decode_hresult(hresult: HRESULT | int) -> str:
     facility: int = (hresult >> 16) & 0x1FFF
     code: int = hresult & 0xFFFF
 
-    severity_str = "Success" if severity == 0 else "Failure"
+    severity_str: Literal["Success", "Failure"] = (
+        "Success" if severity == 0 else "Failure"
+    )
     facility_str = HRESULT.FACILITY_CODES.get(facility, "Unknown Facility")
 
     return (
-        f"HRESULT: 0x{HRESULT._convert_to_hresult(hresult):08X}\n"
+        f"HRESULT: 0x{HRESULT.to_hresult(hresult):08X}\n"
         f"Severity: {severity_str}\n"
         f"Facility: {facility_str} ({facility})\n"
         f"Code: 0x{code:04X} ({code})"
@@ -391,13 +385,18 @@ def decode_hresult(hresult: HRESULT | int) -> str:
 def print_hresult(hresult: HRESULT | int) -> None:
     print(decode_hresult(hresult))
 
+
 def hresult_to_winerror(hresult: int) -> int:
     """Convert a positive HRESULT value to the corresponding WinError value."""
     return hresult - 0x100000000 if hresult & 0x80000000 else hresult
 
+
 def winerror_to_hresult(winerror: int) -> int:
     """Convert a WinError value to the corresponding positive HRESULT value."""
     return winerror + 0x100000000 if winerror < 0 else winerror
+
+S_FALSE = HRESULT(1)
+
 
 if __name__ == "__main__":
     # Example usage:
@@ -405,12 +404,6 @@ if __name__ == "__main__":
     hr2 = HRESULT(c_long(20))
     hr3 = HRESULT(ctypesHRESULT(30))
 
-    print(hr1 + hr2)  # Outputs: 30
-    print(hr3 - hr1)  # Outputs: 20
-    print(hr1 * hr2)  # Outputs: 200
-    print(hr3 / hr2)  # Outputs: 1.5
-    print(hr1 == 10)  # Outputs: True
-    print(hr2 > hr1)  # Outputs: True
-
-S_OK = HRESULT(0)
-S_FALSE = HRESULT(1)
+    print(hr1 == 10)
+    print(hr2 > hr1)
+    print(hr3 == ctypesHRESULT(30))

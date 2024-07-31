@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     with suppress(ImportError, ModuleNotFoundError):
         from comtypes import CoClass  # pyright: ignore[reportMissingTypeStubs, reportAttributeAccessIssue, reportMissingImports]
-    from comtypes.GUID import GUID as COMTYPE_GUID  # pyright: ignore[reportMissingTypeStubs, reportMissingImports]
+        from comtypes.GUID import GUID as COMTYPE_GUID  # pyright: ignore[reportMissingTypeStubs, reportMissingImports]
     from typing_extensions import Self  # pyright: ignore[reportMissingModuleSource]
 
 if not TYPE_CHECKING:
@@ -67,7 +67,7 @@ class GUID(Structure):
         # Our class level singleton pattern fixes the following occasional error using ole32.StringFromCLSID:
         # Fatal Python error: bad ID: Allocated using API 'n', verified using API 'o'
         d1, d2, d3, d4 = cls._parse_args(d1, d2, d3, d4, *args)
-        identifier = (d1, d2, d3, d4)
+        identifier: tuple[int, int, int, bytes] = (d1, d2, d3, d4)
 
         with cls._lock:
             if identifier in cls._instances:
@@ -121,7 +121,9 @@ class GUID(Structure):
         """
         COMTYPE_GUID = None
         with suppress(ImportError, ModuleNotFoundError):
-            from comtypes.GUID import GUID as COMTYPE_GUID  # pyright: ignore[reportMissingTypeStubs, reportMissingImports]
+            from comtypes.GUID import (
+                GUID as COMTYPE_GUID,  # pyright: ignore[reportMissingTypeStubs, reportMissingImports]
+            )
         return (GUID, cls) if COMTYPE_GUID is None else (cls, GUID, COMTYPE_GUID)  # pyright: ignore[reportReturnType]
 
     def __bool__(self):

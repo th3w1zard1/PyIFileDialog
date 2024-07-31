@@ -4,20 +4,28 @@ from _ctypes import _Pointer
 import random
 import sys
 
-from ctypes import c_ulong
+from ctypes import POINTER, WINFUNCTYPE, addressof, byref, c_uint, c_ulong, c_void_p, pointer, cast as cast_with_ctypes
 from ctypes.wintypes import HWND
+from typing import TYPE_CHECKING
 
-from interfaces import COMDLG_FILTERSPEC, IFileDialog, IFileOpenDialog, IFileSaveDialog
+from com_helpers import COMInitializeContext
+from com_types import GUID
+from hresult import HRESULT, HRESULTException, decode_hresult
+from interfaces import COMDLG_FILTERSPEC, CLSID_FileDialog, CLSID_FileOpenDialog, CLSID_FileSaveDialog, IFileDialog, IFileOpenDialog, IFileOpenDialogVTable, IFileSaveDialog, IID_IFileDialog, IID_IFileOpenDialog, IID_IFileSaveDialog
+from iunknown import LPVOID, S_OK, IID_IUnknown, IUnknown
 from windialogs import (
     FreeCOMFunctionPointers,
     LoadCOMFunctionPointers,
     configureFileDialog,
-    createFileDialog,
     getFileDialogResults,
     showDialog,
 )
-from hresult import S_OK
 
+if TYPE_CHECKING:
+    from _ctypes import _Pointer
+    from ctypes import Array
+
+    from interfaces import COMFunctionPointers
 
 # Enum for option states
 class OptionState:
@@ -153,6 +161,8 @@ def getFileDialogOptions(isSaveDialog: bool, randomize: bool, filters: list[COMD
     return c_ulong(options)
 
 
+
+
 def main() -> int:
     while True:
         dialogType = getUserInputInt(
@@ -167,42 +177,85 @@ def main() -> int:
         defaultFolder = getUserInputStr("Default folder path (default: C:): ", "C:") if not randomize else "C:"
 
         filters: list[COMDLG_FILTERSPEC] = []
-        options = getFileDialogOptions(isSaveDialog, randomize, filters)
+        options: c_ulong = getFileDialogOptions(isSaveDialog, randomize, filters)
 
-        comFuncs = LoadCOMFunctionPointers()
+        if dialogType in (1, 4):
+            clsid = CLSID_FileOpenDialog
+            iid = IID_IFileOpenDialog
+            _type_ = IFileOpenDialog
+        elif dialogType == 2:
+            clsid = CLSID_FileSaveDialog
+            iid = IID_IFileSaveDialog
+            _type_ = IFileSaveDialog
+        elif dialogType == 3:
+            clsid = CLSID_FileDialog
+            iid = IID_IFileDialog
+            _type_ = IFileDialog
+        else:
+            raise ValueError(f"Unexpected dialogType: {dialogType} (should be 1-4)")
+
+        comFuncPtrs: COMFunctionPointers = LoadCOMFunctionPointers(_type_)
+        pFileDialog: _Pointer[IFileOpenDialog | IFileSaveDialog | IFileDialog] | None = None
         try:
-            if not all([comFuncs.pCoInitialize, comFuncs.pCoCreateInstance, comFuncs.pCoTaskMemFree, comFuncs.pCoUninitialize, comFuncs.pSHCreateItemFromParsingName]):
+            if not all([comFuncPtrs.pCoInitialize, comFuncPtrs.pCoCreateInstance, comFuncPtrs.pCoTaskMemFree, comFuncPtrs.pCoUninitialize, comFuncPtrs.pSHCreateItemFromParsingName]):
                 raise RuntimeError("Failed to load one or more COM functions.")  # noqa: TRY301
 
-            hr = comFuncs.pCoInitialize(None)
+            hr = comFuncPtrs.pCoInitialize(None)
             if hr != S_OK:
-                raise RuntimeError(f"CoInitialize failed: {hr}")  # noqa: TRY301
-            pFileDialog: _Pointer[IFileOpenDialog | IFileSaveDialog | IFileDialog] = createFileDialog(comFuncs, dialogType)
+                raise OSError(hr, decode_hresult(hr), "Failed to call CoInitialize in order to create IFileDialog")
 
-            configureFileDialog(comFuncs, pFileDialog, filters, defaultFolder, options, forceFileSystem=True, allowMultiselect=True)
+            #pFileDialog = cast_with_ctypes(arrFileDialog, POINTER(_type_))
+            #pFileDialog = POINTER(_type_)()
+            fileDialog: IFileDialog | IFileOpenDialog | IFileSaveDialog = _type_()
+            arrFileDialog: Array[IFileDialog] | Array[IFileOpenDialog] | Array[IFileSaveDialog] = (_type_ * 1)()
+            pFileDialog = pointer(fileDialog)
+            hr = comFuncPtrs.resolve_function(
+                comFuncPtrs.hOle32,
+                b"CoCreateInstance",
+                WINFUNCTYPE(
+                    HRESULT,
+                    POINTER(GUID),
+                    c_void_p,
+                    c_ulong,
+                    POINTER(GUID),
+                    POINTER(_type_* 1),
+                ),
+            )(byref(clsid), None, 1, byref(iid), byref(arrFileDialog))
+            if hr != S_OK:
+                raise HRESULT(hr).exception("CoCreateInstance failed! Cannot create file dialog")
+            #createFileDialog(comFuncs, cast_with_ctypes(pFileDialog, POINTER(_type_)), clsid, iid)
+
+            addr1 = addressof(fileDialog)
+            print("address of arrFileDialog[0]:", addr1)
+            addr1check1 = addressof(pFileDialog.contents)
+            assert addr1 == addr1check1, f"addressof(arrFileDialog[0]) != addressof(pFileDialog.contents) ({addr1} != {addr1check1})"
+
+            #setDialogAttributes(fileDialog, title)
+            configureFileDialog(comFuncPtrs, fileDialog, filters, defaultFolder, options, forceFileSystem=True, allowMultiselect=True)
             showDialog(pFileDialog, HWND(0))
 
             if not isSaveDialog:
-                results: list[str] = getFileDialogResults(comFuncs, pFileDialog)
+                results: list[str] = getFileDialogResults(comFuncPtrs, pFileDialog)
                 for filePath in results:
                     print(f"Selected file: {filePath}")
 
-            pFileDialog.contents.lpVtbl.contents.Release(pFileDialog)
-            comFuncs.pCoUninitialize()
-            FreeCOMFunctionPointers(comFuncs)
-
             if getUserInputStr("Do you want to configure another dialog? (yes/no): ", "yes").lower() != "yes":
                 break
-
-        except Exception as ex:  # noqa: BLE001
-            print(f"Error: {ex}")
-            if comFuncs.pCoUninitialize:
-                comFuncs.pCoUninitialize()
-            FreeCOMFunctionPointers(comFuncs)
-            return 1
+        except OSError as e:
+            if e.winerror and not isinstance(e, HRESULTException):
+                hr = HRESULT(e.winerror)
+                raise hr.exception(str(e)) from e
+            raise
+        finally:
+            hr = S_OK
+            #if pFileDialog is not None:
+            #    hr = pFileDialog.contents.lpVtbl.contents.Release(cast_with_ctypes(pFileDialog, POINTER(IUnknown)))
+            if comFuncPtrs.pCoUninitialize and hr == S_OK:
+                comFuncPtrs.pCoUninitialize()
+            FreeCOMFunctionPointers(comFuncPtrs)
 
     return 0
 
-
 if __name__ == "__main__":
+    import sys
     sys.exit(main())
