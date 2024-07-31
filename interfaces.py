@@ -14,7 +14,7 @@ from ctypes import (
 from ctypes.wintypes import BOOL, HWND, LPCWSTR, LPWSTR
 from typing import TYPE_CHECKING, Sequence
 
-from com.com_types import GUID
+from com_types import GUID
 from hresult import HRESULT
 
 if TYPE_CHECKING:

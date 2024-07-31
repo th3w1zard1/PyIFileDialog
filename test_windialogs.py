@@ -6,11 +6,11 @@ import sys
 from ctypes import POINTER, c_ulong, cast
 from ctypes.wintypes import HWND, LPCWSTR
 
-from com.interfaces import (
+from interfaces import (
     COMDLG_FILTERSPEC,
     IFileOpenDialog,
 )
-from com.windialogs import (
+from windialogs import (
     FreeCOMFunctionPointers,
     LoadCOMFunctionPointers,
     configureFileDialog,

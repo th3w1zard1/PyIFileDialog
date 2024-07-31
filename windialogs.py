@@ -5,7 +5,7 @@ from ctypes import POINTER, Structure, byref, c_long, c_ulong, c_wchar_p, pointe
 from ctypes.wintypes import DWORD, LPWSTR
 from typing import TYPE_CHECKING, Sequence
 
-from com.interfaces import (
+from interfaces import (
     COMDLG_FILTERSPEC,
     E_NOINTERFACE,
     FOS_ALLOWMULTISELECT,

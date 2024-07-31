@@ -5,8 +5,8 @@ import sys
 from ctypes import POINTER, byref, c_uint, windll
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from com.com_types import GUID
-from com.interfaces import IUnknown
+from com_types import GUID
+from interfaces import IUnknown
 from hresult import S_FALSE, S_OK, decode_hresult
 
 if TYPE_CHECKING:
