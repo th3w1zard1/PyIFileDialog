@@ -4,29 +4,16 @@ import threading
 import weakref
 
 from contextlib import suppress
-from ctypes import (
-    POINTER,
-    Structure,
-    byref,
-    c_int,
-    c_ubyte,
-    c_uint,
-    c_ulong,
-    c_ushort,
-    c_wchar_p,
-    oledll,
-    windll,
-)
+from ctypes import POINTER, Structure, byref, c_int, c_uint, c_wchar_p, oledll, windll
+from ctypes.wintypes import BYTE, DWORD, WORD
 from typing import TYPE_CHECKING, Sequence
 
 if TYPE_CHECKING:
-    from ctypes import _CData, _Pointer as PointerType
+    from ctypes import Array, _CData, _Pointer as PointerType
 
-    with suppress(ImportError, ModuleNotFoundError):
-        from comtypes import CoClass  # pyright: ignore[reportMissingTypeStubs, reportAttributeAccessIssue, reportMissingImports]
-        from comtypes.GUID import GUID as COMTYPE_GUID  # pyright: ignore[reportMissingTypeStubs, reportMissingImports]
-    from typing_extensions import Self  # pyright: ignore[reportMissingModuleSource]
-
+    from comtypes import CoClass  # pyright: ignore[reportMissingTypeStubs]
+    from comtypes.GUID import GUID as COMTYPE_GUID  # pyright: ignore[reportMissingTypeStubs, reportMissingImports]
+    from typing_extensions import Self  # pyright: ignore[reportMissingTypeStubs, reportMissingModuleSource]
 if not TYPE_CHECKING:
     PointerType = POINTER(c_uint).__class__
 
@@ -39,18 +26,40 @@ class FDE_SHAREVIOLATION_RESPONSE(c_int):  # noqa: N801
 
 FDE_OVERWRITE_RESPONSE = FDE_SHAREVIOLATION_RESPONSE
 
-
-class GUID(Structure):
+try:
+    from comtypes import GUID as COMTYPE_GUID  # pyright: ignore[reportMissingTypeStubs, reportAttributeAccessIssue]
+    inherit = (COMTYPE_GUID,)
+except ImportError:
+    inherit = (Structure,)
+class GUID(*inherit):
     _instances = weakref.WeakValueDictionary()  # Class-level dictionary to hold GUID instances
     _fields_: Sequence[ tuple[str, type[_CData]] | tuple[str, type[_CData], int] ] = [
-        ("Data1", c_ulong),
-        ("Data2", c_ushort),
-        ("Data3", c_ushort),
-        ("Data4", c_ubyte * 8),
+        ("Data1", DWORD),
+        ("Data2", WORD),
+        ("Data3", WORD),
+        ("Data4", BYTE * 8),
     ]
     _lock: threading.Lock = threading.Lock()
+    Data1: DWORD | int
+    Data2: WORD | int
+    Data3: WORD | int
+    Data4: Array[BYTE] | bytes
 
-    NULL: GUID
+    @classmethod
+    def NULL(cls) -> Self:
+        null_guid: Self = Structure.__new__(cls)
+        null_guid.Data1 = DWORD(0)
+        null_guid.Data2 = WORD(0)
+        null_guid.Data3 = WORD(0)
+        null_guid.Data4 = (BYTE * 8)(*())
+        return null_guid
+
+    @classmethod
+    def create_new(cls) -> Self:
+        """Create a brand new guid (randomly)."""
+        guid = super().__new__(cls)
+        oledll.ole32.CoCreateGuid(byref(guid))
+        return guid
 
     def __new__(
         cls,
@@ -66,8 +75,11 @@ class GUID(Structure):
     ) -> Self:
         # Our class level singleton pattern fixes the following occasional error using ole32.StringFromCLSID:
         # Fatal Python error: bad ID: Allocated using API 'n', verified using API 'o'
-        d1, d2, d3, d4 = cls._parse_args(d1, d2, d3, d4, *args)
-        identifier: tuple[int, int, int, bytes] = (d1, d2, d3, d4)
+        try:
+            d1, d2, d3, d4 = cls._parse_args(d1, d2, d3, d4, *args)
+        except Exception as e:
+            raise OSError("Failed to construct a GUID") from e
+        identifier = (d1, d2, d3, d4)
 
         with cls._lock:
             if identifier in cls._instances:
@@ -75,12 +87,15 @@ class GUID(Structure):
 
             instance = super().__new__(cls)
             cls._instances[identifier] = instance
-            super(cls, instance).__init__()
+            if cls.__base__ is Structure:
+                super(cls, instance).__init__()
+            else:
+                super(cls, instance).__init__(cls.to_string(identifier))
 
-        instance.Data1 = c_ulong(d1)
-        instance.Data2 = c_ushort(d2)
-        instance.Data3 = c_ushort(d3)
-        instance.Data4 = (c_ubyte * 8)(*d4)
+            instance.Data1 = DWORD(d1)
+            instance.Data2 = WORD(d2)
+            instance.Data3 = WORD(d3)
+            instance.Data4 = (BYTE * 8)(*d4)
 
         return instance
 
@@ -111,7 +126,7 @@ class GUID(Structure):
         if result is None:
             d4_hex = "".join(f"{byte:02X}" for byte in self.Data4)
             result = f"{{{self.Data1:08X}-{self.Data2:04X}-{self.Data3:04X}-{d4_hex[:4]}-{d4_hex[4:]}}}"
-        return result and result.strip() or str(self.NULL)
+        return result and result.strip() or str(self.NULL())
 
     @classmethod
     def guid_ducktypes(cls) -> tuple[type[COMTYPE_GUID], type[Self]] | tuple[type[COMTYPE_GUID], type[GUID], type[Self]]:
@@ -121,27 +136,25 @@ class GUID(Structure):
         """
         COMTYPE_GUID = None
         with suppress(ImportError, ModuleNotFoundError):
-            from comtypes.GUID import (
-                GUID as COMTYPE_GUID,  # pyright: ignore[reportMissingTypeStubs, reportMissingImports]
-            )
+            from comtypes.GUID import GUID as COMTYPE_GUID  # pyright: ignore[reportMissingTypeStubs, reportMissingImports]
         return (GUID, cls) if COMTYPE_GUID is None else (cls, GUID, COMTYPE_GUID)  # pyright: ignore[reportReturnType]
 
     def __bool__(self):
-        return self != self.NULL
+        return self != self.NULL()
 
     def __eq__(self, other):
         return (
             self.Data1 == getattr(other, "Data1", None)
             and self.Data2 == getattr(other, "Data2", None)
             and self.Data3 == getattr(other, "Data3", None)
-            and self.Data4 == getattr(other, "Data4", None)
+            and bytes(self.Data4) == bytes(getattr(other, "Data4", b""))
         )
 
     def __bytes__(self) -> bytes:
         return (
-            self.Data1.value.to_bytes(4, byteorder="little")
-            + self.Data2.value.to_bytes(2, byteorder="little")
-            + self.Data3.value.to_bytes(2, byteorder="little")
+            self.Data1.to_bytes(4, byteorder="little")
+            + self.Data2.to_bytes(2, byteorder="little")
+            + self.Data3.to_bytes(2, byteorder="little")
             + self.Data4
         )
 
@@ -153,9 +166,9 @@ class GUID(Structure):
         return self.__class__(str(self))
 
     @classmethod
-    def from_progid(cls, progid_or_guid: str | CoClass | GUID) -> Self | GUID:
+    def from_progid(cls, progid_or_guid: str | CoClass | GUID) -> GUID:
         """Get guid from progid. Also accepts a guid argument which will return a guid instance of that."""
-        progid_or_guid = getattr(progid_or_guid, "_reg_clsid_", progid_or_guid)
+        progid_or_guid = getattr(progid_or_guid, "_reg_clsid_", progid_or_guid)  # pyright: ignore[reportAssignmentType]
         if isinstance(progid_or_guid, cls.guid_ducktypes()):
             return progid_or_guid  # pyright: ignore[reportReturnType]
         if not isinstance(progid_or_guid, str):
@@ -175,13 +188,6 @@ class GUID(Structure):
         return result
 
     @classmethod
-    def create_new(cls) -> Self:
-        """Create a brand new guid."""
-        guid = cls()
-        oledll.ole32.CoCreateGuid(byref(guid))
-        return guid
-
-    @classmethod
     def _parse_args(
         cls,
         d1: int
@@ -196,7 +202,7 @@ class GUID(Structure):
     ) -> tuple[int, int, int, bytes]:  # sourcery skip: low-code-quality
         # Null GUID
         if not d1 and not d2 and not d3 and not d4 and not args:
-            return cls.NULL.Data1.value, cls.NULL.Data2.value, cls.NULL.Data3.value, cls.NULL.Data4.value
+            return 0, 0, 0, b""
 
         if d2 is None and d3 is None and d4 is None and not args:
             if isinstance(d1, str):
@@ -237,4 +243,9 @@ class GUID(Structure):
         data3 = int(hex_values[2], 16)
         data4 = bytes.fromhex(hex_values[3] + hex_values[4])
         return data1, data2, data3, data4
-GUID.NULL = GUID("{00000000-0000-0000-0000-000000000000}")
+
+    @staticmethod
+    def to_string(guid_tuple: tuple[int, int, int, bytes]) -> str:
+        data1, data2, data3, data4 = guid_tuple
+        hex4 = data4.hex()
+        return f"{{{data1:08x}-{data2:04x}-{data3:04x}-{hex4[:4]}-{hex4[4:]}}}"

@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from typing_extensions import Literal, Self  # pyright: ignore[reportMissingModuleSource]
 
 
-class HRESULTException(OSError):
+class HRESULTError(OSError):
     ...
 
 
@@ -120,7 +120,7 @@ class HRESULT(ctypesHRESULT):
             converted_value = 0
         elif isinstance(value, int):
             converted_value = value
-        elif isinstance(value, (c_long, ctypesHRESULT, HRESULT)):
+        elif isinstance(getattr(value, "value", None), int):
             converted_value = value.value
         else:
             raise TypeError(f"Invalid type for HRESULT: {type(value)}")
@@ -133,7 +133,7 @@ class HRESULT(ctypesHRESULT):
             self.value = 0
         elif isinstance(value, int):
             self.value = value
-        elif isinstance(value, (c_long, ctypesHRESULT, HRESULT)):
+        elif isinstance(getattr(value, "value", None), int):
             self.value = value.value
         else:
             raise TypeError(f"Invalid type for HRESULT: {type(value)}")
@@ -177,20 +177,18 @@ class HRESULT(ctypesHRESULT):
     def __eq__(
         self, other: int | ctypesHRESULT
     ) -> bool:  # sourcery skip: assign-if-exp, reintroduce-else
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value == other.value
-        if isinstance(other, int):
-            return self.value == c_long(other).value
-        return NotImplemented
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.value == other_int
 
     def __ne__(
-        self, other: object
+        self, other: HRESULT | ctypesHRESULT | int | c_long
     ) -> bool:  # sourcery skip: assign-if-exp, reintroduce-else
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value != other.value
-        if isinstance(other, int):
-            return self.value != c_long(other).value
-        return NotImplemented
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.value != other_int
 
     def __int__(self) -> int:
         return self.to_hresult(self.value)
@@ -202,105 +200,102 @@ class HRESULT(ctypesHRESULT):
         return (self.value, 1)
 
     def __mod__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value % self.to_hresult(other.value)
-        return self.value % self.to_hresult(other)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.value % other_int
 
     def __divmod__(
         self, other: HRESULT | ctypesHRESULT | int | c_long
     ) -> tuple[int, int]:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return divmod(self.value, self.to_hresult(other.value))
-        return divmod(self.value, self.to_hresult(other))
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return divmod(self.value, other_int)
 
     def __pow__(
         self, other: HRESULT | ctypesHRESULT | int | c_long, mod: int | None = None
     ) -> int:
-        other_value = self.to_hresult(
-            other.value
-            if isinstance(other, (HRESULT, ctypesHRESULT, c_long))
-            else other
-        )
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
         if mod is None:
-            return pow(self.value, other_value)
-        return pow(self.value, other_value, mod)
+            return pow(self.value, other_int)
+        return pow(self.value, other_int, mod)
 
     def __rmod__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.to_hresult(other.value) % self.to_hresult(
-                self.value
-            )
-        return self.to_hresult(other) % self.to_hresult(self.value)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return other_int % self.to_hresult(self.value)
 
     def __rdivmod__(
         self, other: HRESULT | ctypesHRESULT | int | c_long
     ) -> tuple[int, int]:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return divmod(
-                self.to_hresult(other.value),
-                self.to_hresult(self.value),
-            )
-        return divmod(self.to_hresult(other), self.to_hresult(self.value))
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return divmod(other_int, self.to_hresult(self.value))
 
     def __and__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.to_hresult(self.value) & self.to_hresult(
-                other.value
-            )
-        return self.to_hresult(self.value) & self.to_hresult(other)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.to_hresult(self.value) & other_int
 
     def __or__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.to_hresult(self.value) | self.to_hresult(
-                other.value
-            )
-        return self.to_hresult(self.value) | self.to_hresult(other)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.to_hresult(self.value) | other_int
 
     def __xor__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.to_hresult(self.value) ^ self.to_hresult(
-                other.value
-            )
-        return self.to_hresult(self.value) ^ self.to_hresult(other)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.to_hresult(self.value) ^ other_int
 
     def __lshift__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.to_hresult(self.value) << self.to_hresult(
-                other.value
-            )
-        return self.to_hresult(self.value) << self.to_hresult(other)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.to_hresult(self.value) << other_int
 
     def __rshift__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.to_hresult(self.value) >> self.to_hresult(
-                other.value
-            )
-        return self.to_hresult(self.value) >> self.to_hresult(other)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.to_hresult(self.value) >> other_int
 
     def __rand__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.to_hresult(other.value) & self.value
-        return self.to_hresult(other) & self.value
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return other_int & self.value
 
     def __ror__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.to_hresult(other.value) | self.value
-        return self.to_hresult(other) | self.value
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return other_int | self.value
 
     def __rxor__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
         if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
             return self.to_hresult(other.value) ^ self.value
-        return self.to_hresult(other) ^ self.value
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return other_int ^ self.value
 
     def __rlshift__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.to_hresult(other.value) << self.value
-        return self.to_hresult(other) << self.value
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return other_int << self.value
 
     def __rrshift__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> int:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.to_hresult(other.value) >> self.value
-        return self.to_hresult(other) >> self.value
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return other_int >> self.value
 
     def __neg__(self) -> int:
         return -self.value
@@ -321,24 +316,28 @@ class HRESULT(ctypesHRESULT):
         return (self.value,)
 
     def __lt__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> bool:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value < self.to_hresult(other.value)
-        return self.value < self.to_hresult(other)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.value < other_int
 
     def __le__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> bool:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value <= self.to_hresult(other.value)
-        return self.value <= self.to_hresult(other)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.value <= other_int
 
     def __gt__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> bool:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value > self.to_hresult(other.value)
-        return self.value > self.to_hresult(other)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.value > other_int
 
     def __ge__(self, other: HRESULT | ctypesHRESULT | int | c_long) -> bool:
-        if isinstance(other, (HRESULT, ctypesHRESULT, c_long)):
-            return self.value >= self.to_hresult(other.value)
-        return self.value >= self.to_hresult(other)
+        if not isinstance(other, int) and (not hasattr(other, "value") or not isinstance(other.value, int)):
+            return NotImplemented
+        other_int = self.to_hresult(other.value if isinstance(other, (HRESULT, ctypesHRESULT, c_long)) else other)
+        return self.value >= other_int
 
     def __float__(self) -> float:
         return float(self.value)
@@ -357,8 +356,14 @@ class HRESULT(ctypesHRESULT):
             return f"{self.to_hresult(self.value):08X}"
         return format(self.to_hresult(self.value), format_spec)
 
-    def exception(self, short_desc: str):
-        return HRESULTException(self.to_hresult(self.value), decode_hresult(self), short_desc)
+    def exception(self, short_desc: str = "") -> HRESULTError:
+        return HRESULTError(self.to_hresult(self.value), decode_hresult(self), short_desc or "")
+
+    @classmethod
+    def raise_for_status(cls, hresult: HRESULT | ctypesHRESULT | Self | int, short_desc: str = "", *, ignore_s_false: bool = False):
+        hr: Self = hresult if isinstance(hresult, cls) else cls(hresult)
+        if (hr == 1 and not ignore_s_false) or hr not in (0, 1):
+            raise hr.exception(short_desc)
 
 
 
@@ -369,9 +374,7 @@ def decode_hresult(hresult: HRESULT | int) -> str:
     facility: int = (hresult >> 16) & 0x1FFF
     code: int = hresult & 0xFFFF
 
-    severity_str: Literal["Success", "Failure"] = (
-        "Success" if severity == 0 else "Failure"
-    )
+    severity_str: Literal["Success", "Failure"] = "Success" if severity == 0 else "Failure"
     facility_str = HRESULT.FACILITY_CODES.get(facility, "Unknown Facility")
 
     return (
@@ -395,6 +398,7 @@ def winerror_to_hresult(winerror: int) -> int:
     """Convert a WinError value to the corresponding positive HRESULT value."""
     return winerror + 0x100000000 if winerror < 0 else winerror
 
+S_OK = HRESULT(0)
 S_FALSE = HRESULT(1)
 
 

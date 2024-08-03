@@ -1,53 +1,94 @@
 from __future__ import annotations
 
-from _ctypes import _Pointer
-from ctypes import (
-    POINTER,
-    WINFUNCTYPE,
-    Structure,
-    byref,
-    c_long,
-    c_uint,
-    c_ulong,
-    c_void_p,
-    c_wchar_p,
-    cast as cast_with_ctypes,
-    pointer,
-    windll,
-)
-from ctypes.wintypes import DWORD, LPCWSTR, LPWSTR
-from typing import TYPE_CHECKING, Sequence
+import errno
+import os
 
-from com_helpers import COMInitializeContext
+from ctypes import POINTER, WINFUNCTYPE, byref, c_ulong, c_void_p, c_wchar_p, cast as cast_with_ctypes, windll
+from ctypes.wintypes import HMODULE, HWND, LPCWSTR
+from pathlib import WindowsPath
+from typing import TYPE_CHECKING, Any, Sequence
+
+import comtypes  # pyright: ignore[reportMissingTypeStubs]
+import comtypes.client  # pyright: ignore[reportMissingTypeStubs]
+
+from com_helpers import HandleCOMCall
 from com_types import GUID
-from hresult import HRESULT
+from hresult import HRESULT, S_FALSE, S_OK
 from interfaces import (
     COMDLG_FILTERSPEC,
+    FOS_ALLOWMULTISELECT,
+    FOS_FILEMUSTEXIST,
+    FOS_FORCEFILESYSTEM,
+    FOS_FORCESHOWHIDDEN,
+    FOS_OVERWRITEPROMPT,
+    FOS_PATHMUSTEXIST,
+    FOS_PICKFOLDERS,
     SFGAO_FILESYSTEM,
     SFGAO_FOLDER,
-    SIGDN_FILESYSPATH,
-    SIGDN_NORMALDISPLAY,
+    SIGDN,
     CLSID_FileOpenDialog,
+    CLSID_FileSaveDialog,
     COMFunctionPointers,
-    IEnumShellItems,
     IFileDialogEvents,
-    IFileDialogEventsVTable,
     IFileOpenDialog,
-    IID_IFileDialogEvents,
+    IFileSaveDialog,
     IShellItem,
-    IShellItemArray,
 )
-from iunknown import E_NOINTERFACE, HMODULE, S_OK, IID_IUnknown, IUnknown
 
 if TYPE_CHECKING:
-    from ctypes import _CData, _FuncPointer, _Pointer
-    from ctypes.wintypes import HWND
+    from ctypes import _FuncPointer, _Pointer
+    from ctypes.wintypes import LPWSTR
 
-    from interfaces import (
-        IFileDialog,
-        IFileSaveDialog,
-    )
-    from iunknown import LPVOID
+    from interfaces import IFileDialog, IShellItemArray
+
+
+class FileDialogEventsHandler(comtypes.COMObject):
+    _com_interfaces_: Sequence[type[comtypes.IUnknown]] = [IFileDialogEvents]
+
+    def OnFileOk(self, pfd: IFileDialog) -> HRESULT:
+        ppsi: IShellItem = pfd.GetResult()
+        pszFilePath = ppsi.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
+        print(f"OnFileOk, selected '{pszFilePath}'")
+        resolved_path = WindowsPath(pszFilePath).resolve()
+        if not resolved_path.exists():
+            print(f"Invalid file selected: {resolved_path}")
+            return S_FALSE  # Cancel closing the dialog
+        return S_OK
+
+    def OnFolderChanging(self, ifd: IFileDialog, isiFolder: IShellItem) -> HRESULT:  # noqa: N803
+        folder_path = isiFolder.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
+        print(f"OnFolderChanging to folder: {folder_path}")
+        attributes = isiFolder.GetAttributes(0xFFFFFFFF)
+        print(f"Folder attributes: {attributes}")
+        return S_OK
+
+    def OnFolderChange(self, pfd: IFileDialog) -> HRESULT:
+        folder: IShellItem = pfd.GetFolder()
+        folder_path = folder.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
+        print(f"OnFolderChange, current folder: {folder_path}")
+        return S_OK
+
+    def OnSelectionChange(self, pfd: IFileDialog) -> HRESULT:
+        selection: IShellItem = pfd.GetCurrentSelection()
+        selection_path = selection.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
+        print(f"OnSelectionChange, selected item: {selection_path}")
+        return S_OK
+
+    def OnShareViolation(self, pfd: IFileDialog, psi: IShellItem) -> int:
+        file_path = psi.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
+        print(f"OnShareViolation for file: {file_path}!")
+        return 1
+
+    def OnTypeChange(self, ifd: IFileDialog) -> HRESULT:
+        ftIndex = ifd.GetFileTypeIndex()
+        print(f"OnTypeChange, new file type index: {ftIndex}")
+        return S_OK
+
+    def OnOverwrite(self, ifd: IFileDialog, isi: IShellItem) -> int:
+        file_path = isi.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
+        # 1 = Allow Overwrite, 0 will disallow
+        print(f"OnOverwrite for file: {file_path}. Allowing overwrite!")
+        return 1
 
 
 # Helper to convert std::wstring to LPCWSTR
@@ -84,97 +125,33 @@ def LoadCOMFunctionPointers(dialog_type: type[IFileDialog | IFileOpenDialog | IF
     return comFuncPtrs
 
 
-def FreeCOMFunctionPointers(comFuncPtrs: COMFunctionPointers):  # noqa: N803
-    # PFN_FreeLibrary: type[_FuncPointer] = WINFUNCTYPE(c_ulong, c_void_p)
+def FreeCOMFunctionPointers(comFuncPtrs: Any):  # noqa: N803
     if comFuncPtrs.hOle32:
         windll.kernel32.FreeLibrary(cast_with_ctypes(comFuncPtrs.hOle32, HMODULE))
     if comFuncPtrs.hShell32:
         windll.kernel32.FreeLibrary(cast_with_ctypes(comFuncPtrs.hShell32, HMODULE))
 
 
-# FileDialogEventHandler class
-class FileDialogEventHandler(Structure):
-    _fields_: Sequence[tuple[str, type[_CData]] | tuple[str, type[_CData], int]] = [
-        ("lpVtbl", POINTER(IFileDialogEvents))
-    ]
-
-    def __init__(self):
-        self.vtable = IFileDialogEventsVTable(
-            QueryInterface=self.QueryInterface,
-            AddRef=self.AddRef,
-            Release=self.Release,
-            OnFileOk=self.OnFileOk,
-            OnFolderChanging=self.OnFolderChanging,
-            OnFolderChange=self.OnFolderChange,
-            OnSelectionChange=self.OnSelectionChange,
-            OnShareViolation=self.OnShareViolation,
-            OnTypeChange=self.OnTypeChange,
-            OnOverwrite=self.OnOverwrite,
-        )
-        self.lpVtbl: _Pointer[IFileDialogEventsVTable] = pointer(self.vtable)
-        self.refCount = c_long(1)
-
-    def QueryInterface(self, riid: _Pointer[GUID], ppv: _Pointer[LPVOID]):
-        if riid.contents in (IID_IUnknown, IID_IFileDialogEvents):
-            ppv[0] = byref(self)
-            self.AddRef()
-            return S_OK
-        ppv[0] = None
-        return E_NOINTERFACE
-
-    def AddRef(self):
-        self.refCount.value += 1
-        return self.refCount.value
-
-    def Release(self):
-        self.refCount.value -= 1
-        if self.refCount.value == 0:
-            del self
-        return self.refCount.value
-
-    def OnFileOk(self, pfd):
-        return S_OK
-
-    def OnFolderChanging(self, pfd, psiFolder):
-        return S_OK
-
-    def OnFolderChange(self, pfd):
-        return S_OK
-
-    def OnSelectionChange(self, pfd):
-        return S_OK
-
-    def OnShareViolation(self, pfd, psi, pResponse):
-        return S_OK
-
-    def OnTypeChange(self, pfd):
-        return S_OK
-
-    def OnOverwrite(self, pfd, psi, pResponse):
-        return S_OK
-
-
-def createFileDialog(
-    comFuncs: COMFunctionPointers,  # noqa: N803
-    fileDialog: _Pointer[c_void_p],  # noqa: N803
-    clsid: GUID,
-    iid: GUID,
-):  # noqa: N803
-    hr = comFuncs.pCoCreateInstance(byref(clsid), None, 1, byref(iid), byref(fileDialog))
-    if hr != S_OK:
-        raise HRESULT(hr).exception("CoCreateInstance failed! Cannot create file dialog")
-
-
 def showDialog(
-    pFileDialog: _Pointer[IFileOpenDialog | IFileSaveDialog | IFileDialog],  # noqa: N803
+    fileDialog: IFileOpenDialog | IFileSaveDialog | IFileDialog,  # noqa: N803
     hwndOwner: HWND,  # noqa: N803
-):
-    hr = pFileDialog.contents.lpVtbl.contents.Show(pFileDialog, hwndOwner)
-    if hr != S_OK:
-        raise HRESULT(hr).exception("Failed to show the file dialog!")
+) -> bool:
+    """Shows the IFileDialog. Returns True if the user progressed to the end and found a file. False if they cancelled."""
+    hr: HRESULT | int = -1
+    try:
+        hr = fileDialog.Show(hwndOwner)
+    except OSError as e:
+        CANCELLED_BY_USER = 0x800704C7
+        if e.winerror == CANCELLED_BY_USER:
+            return False
+        if hr != -1:
+            raise HRESULT(hr).exception("Failed to show the file dialog!") from e  # noqa: B904
+        return False
+    else:
+        return True
 
 
-def createShellItem(comFuncs: COMFunctionPointers, path: str) -> _Pointer[IShellItem]:  # noqa: N803, ARG001
+def createShellItem(comFuncs: Any, path: str) -> _Pointer[IShellItem]:  # noqa: N803, ARG001
     if not comFuncs.pSHCreateItemFromParsingName:
         raise OSError("comFuncs.pSHCreateItemFromParsingName not found")
     shell_item = POINTER(IShellItem)()
@@ -190,156 +167,261 @@ def setDialogAttributes(
     okButtonLabel: str | None = None,  # noqa: N803
     fileNameLabel: str | None = None,  # noqa: N803
 ) -> None:
-    #cast_fileDialog: IFileDialog = cast_with_ctypes(pointer(fileDialog), POINTER(IFileDialog)).contents
-    #assert addressof(fileDialog) == addressof(cast_fileDialog)
     if title:
-        #cast_fileDialog.lpVtbl.contents.SetTitle(cast_fileDialog, string_to_LPCWSTR(title))
-        fileDialog.lpVtbl.contents.SetTitle(byref(fileDialog), string_to_LPCWSTR(title))
-
+        fileDialog.SetTitle(title)
     if okButtonLabel:
-        fileDialog.lpVtbl.contents.SetOkButtonLabel(byref(fileDialog), string_to_LPCWSTR(okButtonLabel))
-
+        fileDialog.SetOkButtonLabel(okButtonLabel)
     if fileNameLabel:
-        fileDialog.lpVtbl.contents.SetFileName(byref(fileDialog), string_to_LPCWSTR(fileNameLabel))
+        fileDialog.SetFileNameLabel(fileNameLabel)
 
 
-# Function to configure file dialog
-def configureFileDialog(  # noqa: PLR0913
-    comFuncs: COMFunctionPointers,  # noqa: N803
+def setupFileDialogEvents(
     fileDialog: IFileOpenDialog | IFileSaveDialog | IFileDialog,  # noqa: N803
-    filters: list[COMDLG_FILTERSPEC],  # noqa: N803
-    defaultFolder: str,  # noqa: N803
-    options: c_ulong,
-    forceFileSystem: bool = False,  # noqa: N803, FBT001, FBT002
-    allowMultiselect: bool = False,  # noqa: N803, FBT001, FBT002
+) -> int:
+    #events_interface = IFileDialogEvents()
+    events_handler = FileDialogEventsHandler()
+    return fileDialog.Advise(events_handler)
+
+
+DEFAULT_FILTERS: list[COMDLG_FILTERSPEC] = [
+    COMDLG_FILTERSPEC("All Files", "*.*"),
+    COMDLG_FILTERSPEC("Text Files", "*.txt"),
+    COMDLG_FILTERSPEC("Image Files", "*.png;*.jpg;*.jpeg;*.bmp;*.gif"),
+    COMDLG_FILTERSPEC("Document Files", "*.doc;*.docx;*.pdf;*.xls;*.xlsx"),
+    COMDLG_FILTERSPEC("Audio Files", "*.mp3;*.wav;*.wma;*.aac"),
+    COMDLG_FILTERSPEC("Video Files", "*.mp4;*.avi;*.mkv;*.mov;*.wmv"),
+    COMDLG_FILTERSPEC("Archive Files", "*.zip;*.rar;*.7z;*.tar;*.gz"),
+    COMDLG_FILTERSPEC("Executable Files", "*.exe;*.bat;*.msi"),
+    COMDLG_FILTERSPEC("HTML Files", "*.htm;*.html"),
+    COMDLG_FILTERSPEC("XML Files", "*.xml"),
+    COMDLG_FILTERSPEC("JavaScript Files", "*.js"),
+    COMDLG_FILTERSPEC("CSS Files", "*.css"),
+    COMDLG_FILTERSPEC("Python Files", "*.py"),
+    COMDLG_FILTERSPEC("C/C++ Files", "*.c;*.cpp;*.h;*.hpp"),
+    COMDLG_FILTERSPEC("Java Files", "*.java"),
+    COMDLG_FILTERSPEC("Ruby Files", "*.rb"),
+    COMDLG_FILTERSPEC("Perl Files", "*.pl"),
+    COMDLG_FILTERSPEC("PHP Files", "*.php"),
+    COMDLG_FILTERSPEC("Shell Script Files", "*.sh"),
+    COMDLG_FILTERSPEC("Batch Files", "*.bat"),
+    COMDLG_FILTERSPEC("INI Files", "*.ini"),
+    COMDLG_FILTERSPEC("Log Files", "*.log"),
+    COMDLG_FILTERSPEC("SVG Files", "*.svg"),
+    COMDLG_FILTERSPEC("Markdown Files", "*.md"),
+    COMDLG_FILTERSPEC("YAML Files", "*.yaml;*.yml"),
+    COMDLG_FILTERSPEC("JSON Files", "*.json"),
+    COMDLG_FILTERSPEC("PowerShell Files", "*.ps1"),
+    COMDLG_FILTERSPEC("MATLAB Files", "*.m"),
+    COMDLG_FILTERSPEC("R Files", "*.r"),
+    COMDLG_FILTERSPEC("Lua Files", "*.lua"),
+    COMDLG_FILTERSPEC("Rust Files", "*.rs"),
+    COMDLG_FILTERSPEC("Go Files", "*.go"),
+    COMDLG_FILTERSPEC("Swift Files", "*.swift"),
+    COMDLG_FILTERSPEC("Kotlin Files", "*.kt;*.kts"),
+    COMDLG_FILTERSPEC("Objective-C Files", "*.m;*.mm"),
+    COMDLG_FILTERSPEC("SQL Files", "*.sql"),
+    COMDLG_FILTERSPEC("Config Files", "*.conf"),
+    COMDLG_FILTERSPEC("CSV Files", "*.csv"),
+    COMDLG_FILTERSPEC("TSV Files", "*.tsv"),
+    COMDLG_FILTERSPEC("LaTeX Files", "*.tex"),
+    COMDLG_FILTERSPEC("BibTeX Files", "*.bib"),
+    COMDLG_FILTERSPEC("Makefiles", "Makefile"),
+    COMDLG_FILTERSPEC("Gradle Files", "*.gradle"),
+    COMDLG_FILTERSPEC("Ant Build Files", "*.build.xml"),
+    COMDLG_FILTERSPEC("Maven POM Files", "pom.xml"),
+    COMDLG_FILTERSPEC("Dockerfiles", "Dockerfile"),
+    COMDLG_FILTERSPEC("Vagrantfiles", "Vagrantfile"),
+    COMDLG_FILTERSPEC("Terraform Files", "*.tf"),
+    COMDLG_FILTERSPEC("HCL Files", "*.hcl"),
+    COMDLG_FILTERSPEC("Kubernetes YAML Files", "*.yaml;*.yml")
+]
+
+
+def configureFileDialog(  # noqa: PLR0913
+    comFuncs: Any,  # noqa: N803
+    fileDialog: IFileOpenDialog | IFileSaveDialog | IFileDialog,  # noqa: N803
+    filters: list[COMDLG_FILTERSPEC] | None = None,  # noqa: N803
+    defaultFolder: str | os.PathLike | None = None,  # noqa: N803
+    options: int | None = None,
 ):
     if defaultFolder:
-        pFolder: _Pointer[IShellItem] = createShellItem(comFuncs, defaultFolder)
-        hr = fileDialog.lpVtbl.contents.SetFolder(fileDialog, pFolder)
-        if hr != S_OK:
-            raise HRESULT(hr).exception("Failed to set default folder")
-        pFolder.contents.lpVtbl.contents.Release(pFolder)
+        defaultFolder_path: WindowsPath = WindowsPath(defaultFolder).resolve()
+        defaultFolder_pathStr = str(defaultFolder_path)
+        if not defaultFolder_path.is_dir():
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), defaultFolder_pathStr)
+        shell_item: comtypes._Pointer[IShellItem] = createShellItem(comFuncs, defaultFolder_pathStr)
+        with HandleCOMCall(f"SetFolder({defaultFolder_pathStr})") as check:
+            check(fileDialog.SetFolder(shell_item))
+        with HandleCOMCall(f"SetDefaultFolder({defaultFolder_pathStr})") as check:
+            check(fileDialog.SetDefaultFolder(shell_item))
 
-    if forceFileSystem:
-        options = c_ulong(options.value | 0x00000040)  # FOS_FORCEFILESYSTEM
+    if options is not None:
+        with HandleCOMCall(f"SetOptions({options})") as check:
+            check(fileDialog.SetOptions(options))
+        cur_options = fileDialog.GetOptions()
+        assert options == cur_options
 
-    if allowMultiselect:
-        options = c_ulong(options.value | 0x00000200)  # FOS_ALLOWMULTISELECT
+    if filters is None:  # if empty actually leave it empty. None means default.
+        filters = DEFAULT_FILTERS
+    filter_array = (COMDLG_FILTERSPEC * len(filters))()
+    for i, dialogFilter in enumerate(filters):
+        filter_array[i].pszName = dialogFilter.pszName
+        filter_array[i].pszSpec = dialogFilter.pszSpec
 
-    if filters:
-        filter_array = (COMDLG_FILTERSPEC * len(filters))()
-        for i, dialogFilter in enumerate(filters):
-            filter_array[i].pszName = dialogFilter.pszName
-            filter_array[i].pszSpec = dialogFilter.pszSpec
-
-        hr = fileDialog.lpVtbl.contents.SetFileTypes(byref(fileDialog), len(filters), byref(filter_array[0]))
-        if hr != S_OK:
-            raise HRESULT(hr).exception("Failed to set file types")
-
-    hr = fileDialog.lpVtbl.contents.SetOptions(fileDialog, options)
-    if hr != S_OK:
-        raise HRESULT(hr).exception("Failed to set dialog options")
+    #hr = fileDialog.SetFileTypes(len(filters), c_void_p(addressof(filter_array)))
+    #if hr != S_OK:
+    #    raise HRESULT(hr).exception("Failed to set file types")
 
 
-def getFileDialogResults(  # noqa: C901, PLR0912, PLR0915
+def browse_folders(
+    title: str = "Select Folder",
+    default_folder: str = "C:\\",
+    allow_multiple: bool = False,  # noqa: FBT001, FBT002
+    show_hidden: bool = False  # noqa: FBT001, FBT002
+) -> list[str]:
+    comFuncs: COMFunctionPointers = LoadCOMFunctionPointers(IFileOpenDialog)
+    fileOpenDialog: IFileOpenDialog = comtypes.client.CreateObject(CLSID_FileOpenDialog, interface=IFileOpenDialog)
+
+    options: int = FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST
+    if allow_multiple:
+        options |= FOS_ALLOWMULTISELECT
+    if show_hidden:
+        options |= FOS_FORCESHOWHIDDEN
+
+    filters = []
+    configureFileDialog(comFuncs, fileOpenDialog, filters, default_folder, options)
+    setDialogAttributes(fileOpenDialog, title)
+    showDialog(fileOpenDialog, HWND(0))
+
+    return getFileOpenDialogResults(comFuncs, fileOpenDialog)
+
+def browse_files(
+    title: str = "Select File(s)",
+    default_folder: str = "C:\\",
+    allow_multiple: bool = False,  # noqa: FBT001, FBT002
+    show_hidden: bool = True,  # noqa: FBT001, FBT002
+    filters: list[COMDLG_FILTERSPEC] | None = None
+) -> list[str]:
+    comFuncs: COMFunctionPointers = LoadCOMFunctionPointers(IFileOpenDialog)
+    fileOpenDialog: IFileOpenDialog = comtypes.client.CreateObject(CLSID_FileOpenDialog, interface=IFileOpenDialog)
+
+    options: int = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST
+    if allow_multiple:
+        options |= FOS_ALLOWMULTISELECT
+    if show_hidden:
+        options |= FOS_FORCESHOWHIDDEN
+
+    if filters is None:
+        filters = DEFAULT_FILTERS
+
+    configureFileDialog(comFuncs, fileOpenDialog, filters, default_folder, options)
+    setDialogAttributes(fileOpenDialog, title)
+    showDialog(fileOpenDialog, HWND(0))
+
+    results: list[str] = getFileOpenDialogResults(comFuncs, fileOpenDialog)
+    return results
+
+def save_file(
+    title: str = "Save File",
+    default_folder: str = "C:\\",
+    default_file_name: str = "Untitled",
+    overwrite_prompt: bool = True,
+    show_hidden: bool = False,
+    filters: list[COMDLG_FILTERSPEC] | None = None
+) -> str:
+    comFuncs: COMFunctionPointers = LoadCOMFunctionPointers(IFileSaveDialog)
+    fileSaveDialog: IFileSaveDialog = comtypes.client.CreateObject(CLSID_FileSaveDialog, interface=IFileSaveDialog)
+
+    options = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST
+    if overwrite_prompt:
+        options |= FOS_OVERWRITEPROMPT
+    if show_hidden:
+        options |= FOS_FORCESHOWHIDDEN
+
+    if filters is None:
+        filters = DEFAULT_FILTERS
+
+    configureFileDialog(comFuncs, fileSaveDialog, filters, default_folder, options)
+    setDialogAttributes(fileSaveDialog, title)
+    fileSaveDialog.SetFileName(default_file_name)
+    showDialog(fileSaveDialog, HWND(0))
+
+    result: str = getFileSaveDialogResults(comFuncs, fileSaveDialog)
+    return result
+
+
+def getFileOpenDialogResults(  # noqa: C901, PLR0912, PLR0915
     comFuncs: COMFunctionPointers,  # noqa: N803
-    pFileOpenDialog: _Pointer[IFileOpenDialog | IFileSaveDialog | IFileDialog],  # noqa: N803
+    fileOpenDialog: IFileOpenDialog,  # noqa: N803
 ) -> list[str]:
     results: list[str] = []
-    pResultsArray = POINTER(IShellItemArray)()
-    hr = pFileOpenDialog.contents.lpVtbl.contents.GetResults(pFileOpenDialog, byref(pResultsArray))
-    if hr != S_OK:
-        raise HRESULT(hr).exception(f"Failed to get dialog results. HRESULT: {hr}")
+    resultsArray: IShellItemArray = fileOpenDialog.GetResults()
+    itemCount: int = resultsArray.GetCount()
 
-    itemCount = DWORD()
-    hr = pResultsArray.contents.lpVtbl.contents.GetCount(pResultsArray, byref(itemCount))
-    if hr != S_OK:
-        raise HRESULT(hr).exception(f"Failed to get item count. HRESULT: {hr}")
-
-    print(f"Number of items selected: {itemCount.value}")
-
-    pEnumShellItems = POINTER(IEnumShellItems)()
-    hr = pResultsArray.contents.lpVtbl.contents.EnumItems(pResultsArray, byref(pEnumShellItems))
-    if hr == S_OK and pEnumShellItems:
-        pEnumItem = POINTER(IShellItem)()
-        fetched = DWORD()
-        while (
-            pEnumShellItems.contents.lpVtbl.contents.Next(pEnumShellItems, 1, byref(pEnumItem), byref(fetched)) == S_OK
-            and fetched.value > 0
-        ):
-            print("Enumerating item:")
-            pszName = LPWSTR()
-            hr = pEnumItem.contents.lpVtbl.contents.GetDisplayName(pEnumItem, SIGDN_NORMALDISPLAY, byref(pszName))
-            if hr != S_OK:
-                raise HRESULT(hr).exception("Failed to get pszName from IEnumShellItems")
-            print(f" - Display name: {pszName.value}")
-            comFuncs.pCoTaskMemFree(pszName)
-
-            pszFilePath = LPWSTR()
-            hr = pEnumItem.contents.lpVtbl.contents.GetDisplayName(pEnumItem, SIGDN_FILESYSPATH, byref(pszFilePath))
-            if hr != S_OK:
-                raise HRESULT(hr).exception("Failed to get pszFilePath from IEnumShellItems")
-            print(f" - File path: {pszFilePath.value}")
-            comFuncs.pCoTaskMemFree(pszFilePath)
-
-            attributes = c_ulong()
-            hr = pEnumItem.contents.lpVtbl.contents.GetAttributes(pEnumItem, SFGAO_FILESYSTEM | SFGAO_FOLDER, byref(attributes))
-            if hr != S_OK:
-                raise HRESULT(hr).exception("Failed to get attributes from IEnumShellItems")
-            print(f" - Attributes: {attributes.value}")
-
-            pParentItem = POINTER(IShellItem)()
-            hr = pEnumItem.contents.lpVtbl.contents.GetParent(pEnumItem, byref(pParentItem))
-            if hr != S_OK:
-                raise HRESULT(hr).exception("Failed to GetParent from IEnumShellItems")
-            if pParentItem:
-                pszParentName = LPWSTR()
-                hr = pParentItem.contents.lpVtbl.contents.GetDisplayName(pParentItem, SIGDN_NORMALDISPLAY, byref(pszParentName))
-                if hr != S_OK:
-                    raise HRESULT(hr).exception("Failed to GetDisplayName from GetParent from IEnumShellItems")
-                print(f" - Parent: {pszParentName.value}")
-                comFuncs.pCoTaskMemFree(pszParentName)
-                pParentItem.contents.lpVtbl.contents.Release(pParentItem)
-
-            pEnumItem.contents.lpVtbl.contents.Release(pEnumItem)
-
-        pEnumShellItems.contents.lpVtbl.contents.Release(pEnumShellItems)
-
-    for i in range(itemCount.value):
-        pItem = POINTER(IShellItem)()
-        hr = pResultsArray.contents.lpVtbl.contents.GetItemAt(pResultsArray, i, byref(pItem))
-        if hr != S_OK:
-            raise HRESULT(hr).exception(f"Failed to get item at index {i}")
-
-        pszFilePath = LPWSTR()
-        hr = pItem.contents.lpVtbl.contents.GetDisplayName(pItem, SIGDN_FILESYSPATH, byref(pszFilePath))
-        if hr == S_OK and pszFilePath.value is not None:
-            results.append(pszFilePath.value)
-            print(f"Item {i} file path: {pszFilePath.value}")
-            comFuncs.pCoTaskMemFree(pszFilePath)
+    for i in range(itemCount):
+        shell_item: IShellItem = resultsArray.GetItemAt(i)
+        szFilePath: str = shell_item.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
+        szFilePathStr = str(szFilePath)
+        if szFilePathStr and szFilePathStr.strip():
+            results.append(szFilePathStr)
+            print(f"Item {i} file path: {szFilePath}")
+            #comFuncs.pCoTaskMemFree(szFilePath)   # line crashes
         else:
-            raise HRESULT(hr).exception(f"Failed to get file path for item {i}")
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(szFilePath))
 
-        attributes = c_ulong()
-        hr = pItem.contents.lpVtbl.contents.GetAttributes(pItem, SFGAO_FILESYSTEM | SFGAO_FOLDER, byref(attributes))
-        if hr != S_OK:
-            raise HRESULT(hr).exception(f"Failed to get item attributes for item {i}")
-        print(f"Item {i} attributes: {attributes.value}")
+        attributes: c_ulong = shell_item.GetAttributes(SFGAO_FILESYSTEM | SFGAO_FOLDER)
+        print(f"Item {i} attributes: {attributes}")
 
-        pParentItem = POINTER(IShellItem)()
-        hr = pItem.contents.lpVtbl.contents.GetParent(pItem, byref(pParentItem))
-        if hr != S_OK:
-            raise HRESULT(hr).exception(f"Failed to get item attributes for item {i}")
-        if pParentItem:
-            pszParentName = LPWSTR()
-            hr = pParentItem.contents.lpVtbl.contents.GetDisplayName(pParentItem, SIGDN_NORMALDISPLAY, byref(pszParentName))
-            if hr != S_OK:
-                raise HRESULT(hr).exception(f"Failed to GetDisplayName for GetParent on item {i}")
-            print(f"Item {i} parent: {pszParentName.value}")
-            comFuncs.pCoTaskMemFree(pszParentName)
-            pParentItem.contents.lpVtbl.contents.Release(pParentItem)
+        parentItem: IShellItem | comtypes.IUnknown = shell_item.GetParent()
+        if isinstance(parentItem, IShellItem) or hasattr(parentItem, "GetDisplayName"):
+            szParentName: LPWSTR | str = parentItem.GetDisplayName(SIGDN.SIGDN_NORMALDISPLAY)
+            print(f"Item {i} parent: {szParentName}")
+            comFuncs.pCoTaskMemFree(szParentName)
+            parentItem.Release()
 
-        pItem.contents.lpVtbl.contents.Release(pItem)
+        shell_item.Release()
 
-    pResultsArray.contents.lpVtbl.contents.Release(pResultsArray)
+    resultsArray.Release()
     return results
+
+
+def getFileSaveDialogResults(  # noqa: C901, PLR0912, PLR0915
+    comFuncs: COMFunctionPointers,  # noqa: N803
+    fileSaveDialog: IFileSaveDialog,  # noqa: N803
+) -> str:
+    results = ""
+    resultItem: IShellItem = fileSaveDialog.GetResult()
+
+    szFilePath = resultItem.GetDisplayName(SIGDN.SIGDN_FILESYSPATH)
+    szFilePathStr = str(szFilePath)
+    if szFilePathStr and szFilePathStr.strip():
+        results = szFilePathStr
+        print(f"Selected file path: {szFilePath}")
+    else:
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(szFilePath))
+
+    attributes: c_ulong = resultItem.GetAttributes(SFGAO_FILESYSTEM | SFGAO_FOLDER)
+    print(f"Selected item attributes: {attributes}")
+
+    parentItem: IShellItem | comtypes.IUnknown = resultItem.GetParent()
+    if isinstance(parentItem, IShellItem) or hasattr(parentItem, "GetDisplayName"):
+        szParentName: LPWSTR | str = parentItem.GetDisplayName(SIGDN.SIGDN_NORMALDISPLAY)
+        print(f"Selected item parent: {szParentName}")
+        comFuncs.pCoTaskMemFree(szParentName)
+        parentItem.Release()
+
+    resultItem.Release()
+
+    return results
+
+
+# Example usage
+if __name__ == "__main__":
+    selected_folders: list[str] = browse_folders()
+    print("Selected folders:", selected_folders)
+
+    selected_files: list[str] = browse_files()
+    print("Selected files:", selected_files)
+
+    saved_file: str = save_file()
+    print("Saved file:", saved_file)
